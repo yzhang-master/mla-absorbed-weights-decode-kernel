@@ -5,11 +5,8 @@ import torch
 from mla_decode.cache import LatentKVCache
 from mla_decode.config import MLAConfig
 from mla_decode.kernel import mla_absorbed_decode
-from mla_decode.reference import (
-    absorb_query,
-    explicit_mla_heads,
-    project_output,
-)
+from mla_decode.reference import absorb_query, explicit_mla_heads, project_output
+from mla_decode.rope import apply_rope
 from mla_decode.weights import MLAWeights
 
 
@@ -51,7 +48,7 @@ class MLADecoder:
         self, hidden: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         c = self.config
-        if hidden.shape != (hidden.shape[0], c.hidden_size) or hidden.ndim != 2:
+        if hidden.ndim != 2 or hidden.shape[1] != c.hidden_size:
             raise ValueError(f"hidden must have shape [batch, {c.hidden_size}]")
         if hidden.device != self.device or hidden.dtype != torch.float32:
             raise ValueError("hidden must be fp32 and on the weight device")
@@ -62,9 +59,20 @@ class MLADecoder:
         latent, rope = kv.split([c.kv_lora_rank, c.qk_rope_head_dim], dim=-1)
         return q_nope, q_rope, latent, rope
 
+    def _project_rotated(
+        self, hidden: torch.Tensor, cache: LatentKVCache
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if hidden.shape[0] != cache.batch_size:
+            raise ValueError("hidden batch size does not match the cache")
+        q_nope, q_rope, latent, rope = self.project(hidden)
+        q_rope = apply_rope(q_rope, cache.lengths)
+        rope = apply_rope(rope, cache.lengths)
+        return q_nope, q_rope, latent, rope
+
     def attend(
         self, q_nope: torch.Tensor, q_rope: torch.Tensor, cache: LatentKVCache
     ) -> torch.Tensor:
+        """Attend with projected queries; q_rope must already be position-rotated."""
         q_absorbed = absorb_query(q_nope, self.weights.w_uk)
         heads = mla_absorbed_decode(
             q_absorbed,
@@ -78,7 +86,7 @@ class MLADecoder:
     def decode(
         self, hidden: torch.Tensor, cache: LatentKVCache, *, append: bool = True
     ) -> torch.Tensor:
-        q_nope, q_rope, latent, rope = self.project(hidden)
+        q_nope, q_rope, latent, rope = self._project_rotated(hidden, cache)
         if append:
             cache.append(latent, rope)
         return self.attend(q_nope, q_rope, cache)
@@ -86,7 +94,7 @@ class MLADecoder:
     def reference_decode(
         self, hidden: torch.Tensor, cache: LatentKVCache, *, append: bool = True
     ) -> torch.Tensor:
-        q_nope, q_rope, latent, rope = self.project(hidden)
+        q_nope, q_rope, latent, rope = self._project_rotated(hidden, cache)
         if append:
             cache.append(latent, rope)
         heads = explicit_mla_heads(
