@@ -45,7 +45,7 @@ def fill_ragged_cache(
     ("lengths", "config"),
     [
         ([1, 5, 9], {}),
-        ([17, 33], dict(num_heads=2, kv_lora_rank=13, qk_rope_head_dim=3)),
+        ([17, 33], dict(num_heads=2, kv_lora_rank=13, qk_rope_head_dim=4)),
         ([2, 7], dict(num_heads=4, kv_lora_rank=4, qk_nope_head_dim=6, v_head_dim=5)),
     ],
 )
