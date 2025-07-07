@@ -17,6 +17,8 @@ class MLAConfig:
         for name, value in vars(self).items():
             if value <= 0:
                 raise ValueError(f"{name} must be positive, got {value}")
+        if self.qk_rope_head_dim % 2 != 0:
+            raise ValueError("qk_rope_head_dim must be even")
 
     @property
     def qk_head_dim(self) -> int:
